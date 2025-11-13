@@ -58,8 +58,38 @@ class FFCCVAE(torch.nn.Module):
 
         self.enc_model = nn.ModuleList()
         self.dec_model = nn.ModuleList()
+
+        self._dataset_setup()
+
+        # Dynamically add layers
+        self.dims = [self.CNN_l1_dims]
+        self.image_size = self.CNN_l1_dims[1]
+
+        # setup the Encoder CNN layers
+        self._enc_setup()
+        # setup the Latent CNN layers
+        self._latent_setup()
+        # setup the Decoder CNN layers
+        self._dec_setup()
+
+        # Initialize the weights
+        self._init_weights()
+
         
-        ## MNIST ##
+
+    def _init_weights(self):
+        
+        for m in self.enc_model.modules():
+            if isinstance(m, nn.Conv2d):
+                torch.nn.init.kaiming_normal_(m.weight)
+                torch.nn.init.zeros_(m.bias)
+        for m in self.dec_model.modules():
+            if isinstance(m, nn.Conv2d):
+                torch.nn.init.kaiming_normal_(m.weight)
+                torch.nn.init.zeros_(m.bias)
+
+    def _dataset_setup(self):
+         ## MNIST ##
         if self.opt.input.dataset == 'mnist':
             self.n_classes = 10
 
@@ -70,7 +100,7 @@ class FFCCVAE(torch.nn.Module):
                 self.start_end = [[0, 2], [0, 3], [0, 4], [0, 5], [0, 20], [0, 20]]
             else:
                 self.start_end = [[0, 50], [0, 100], [0, 150], [0, 200], [0, 250], [0, 300]]
-            CNN_l1_dims = [1, 28, 28]  # Grayscale images, 28x28
+            self.CNN_l1_dims = [1, 28, 28]  # Grayscale images, 28x28
             self.class_names= ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
 
         ## Fashion-MNIST ##
@@ -83,7 +113,7 @@ class FFCCVAE(torch.nn.Module):
                 # self.start_end = [[0, 6], [0, 9], [0, 11], [0, 14], [0, 30], [0, 40]]
             else:
                 self.start_end = [[0, 10], [0, 20], [0, 30], [0, 40], [0, 50], [0, 60]]
-            CNN_l1_dims = [1, 28, 28]
+            self.CNN_l1_dims = [1, 28, 28]
             self.class_names= ["T-shirt", "Trouser", "Pullover", "Dress", "Coat", "Sandal", "Shirt", "Sneaker", "Bag", "Ankle boot"]
 
         ## CIFAR-10 ##
@@ -97,7 +127,7 @@ class FFCCVAE(torch.nn.Module):
                 # self.start_end = [[0, 30], [0, 30], [30, 60], [30, 60], [60, 85], [60, 85], [85, 100], [85, 100]]
             else:
                 self.start_end = [[0, 100], [0, 150], [0, 200], [0, 250], [0, 300], [0, 350]]
-            CNN_l1_dims = [3, 32, 32]  # RGB images, 32x32
+            self.CNN_l1_dims = [3, 32, 32]  # RGB images, 32x32
             self.class_names= ["airplane", "automobile", "bird", "cat", "deer", "dog", "frog", "horse", "ship", "truck"]
             self.path_fid_ref = os.path.join(os.getcwd(), 'fid_references', 'cifar10_train.npz')
 
@@ -112,7 +142,7 @@ class FFCCVAE(torch.nn.Module):
                 # self.start_end = [[0, 30], [0, 30], [30, 60], [30, 60], [60, 85], [60, 85], [85, 100], [85, 100]]
             else:
                 self.start_end = [[0, 100], [0, 150], [0, 200], [0, 250], [0, 300], [0, 350]]
-            CNN_l1_dims = [3, 64, 64]  # RGB images, 30x30
+            self.CNN_l1_dims = [3, 64, 64]  # RGB images, 30x30
             self.class_names= ["20", "30", "50", "60", "70", "80", "80 lifted", "100", "120", "no overtaking"]
             self.path_fid_ref = os.path.join(os.getcwd(), 'fid_references', 'GTSRB_train10.npz')
         
@@ -124,15 +154,13 @@ class FFCCVAE(torch.nn.Module):
                 self.start_end = [[0, 10], [0, 15], [0, 20], [0, 25], [0, 35], [0, 50]]
             else:
                 self.start_end = [[0, 10], [0, 20], [0, 30], [0, 40], [0, 50], [0, 60]]
-            CNN_l1_dims = [3, 32, 32]  # SVHN images are RGB, 32x32
+            self.CNN_l1_dims = [3, 32, 32]  # SVHN images are RGB, 32x32
         else:
             raise ValueError(f"Unknown dataset: {self.opt.input.dataset}")
+        
+        return None
 
-
-        # Dynamically add layers
-        dims = [CNN_l1_dims]
-        self.image_size = CNN_l1_dims[1]
-
+    def _enc_setup(self):
         for i, out_channels in enumerate(self.enc_channel_list):
             if self.ClassGroups:
                 #ClassGroup case for CIFAR-100
@@ -147,12 +175,16 @@ class FFCCVAE(torch.nn.Module):
                 else:
                     class_groups = int(self.n_classes/self.n_groups[i])
 
-                in_channels = dims[-1][0] # [[1, 28, 28]]
-                layer = Layer_cnn.Conv_Layer(dims[-1], opt= self.opt, in_channels=in_channels, out_channels=out_channels, num_classes=self.n_groups[i], act_fn = self.relu_enc[i],
-                                kernel_size=self.kernel["kernel_size"], stride = self.kernel["stride"], padding=self.kernel["padding"], maxpool=self.maxpool, batchnorm=self.batchnorm_enc[i],
-                                groups=group, droprate=0, loss_criterion=self.loss, ClassGroups = class_groups).to(self.opt.device)
+                in_channels = self.dims[-1][0] # [[1, 28, 28]]
+                layer = Layer_cnn.Conv_Layer(
+                    self.dims[-1], opt = self.opt, in_channels = in_channels, out_channels = out_channels, 
+                    num_classes = self.n_groups[i], act_fn = self.relu_enc[i],
+                    kernel_size = self.kernel["kernel_size"], stride = self.kernel["stride"],
+                    padding = self.kernel["padding"], maxpool = self.maxpool, batchnorm = self.batchnorm_enc[i],
+                    groups = group, droprate = 0, loss_criterion = self.loss, ClassGroups = class_groups
+                ).to(self.opt.device)
                 self.enc_model.append(layer)
-                dims.append(layer.next_dims)
+                self.dims.append(layer.next_dims)
                 
                     
             else:
@@ -165,30 +197,45 @@ class FFCCVAE(torch.nn.Module):
                 else:
                     group = 1
 
-                
-                
-
-                in_channels = dims[-1][0] # [[1, 28, 28]]
-                layer = Layer_cnn.Conv_Layer(dims[-1], opt= self.opt, in_channels=in_channels, out_channels=out_channels, num_classes=self.n_classes, act_fn = self.relu_enc[i],
-                                kernel_size=self.kernel["kernel_size"], stride = self.kernel["stride"], padding=self.kernel["padding"], maxpool=self.maxpool, batchnorm=self.batchnorm_enc[i],
-                                groups=group, droprate=0, loss_criterion=self.loss, ClassGroups = class_groups).to(self.opt.device)
+                in_channels = self.dims[-1][0] # [[1, 28, 28]]
+                layer = Layer_cnn.Conv_Layer(
+                                self.dims[-1], opt= self.opt, in_channels = in_channels,
+                                out_channels = out_channels, num_classes = self.n_classes, act_fn = self.relu_enc[i],
+                                kernel_size = self.kernel["kernel_size"], stride = self.kernel["stride"], 
+                                padding = self.kernel["padding"], maxpool = self.maxpool, batchnorm = self.batchnorm_enc[i],
+                                groups = group, droprate = 0, loss_criterion = self.loss, ClassGroups = class_groups
+                                ).to(self.opt.device)
                 self.enc_model.append(layer)
-                dims.append(layer.next_dims)
+                self.dims.append(layer.next_dims)
                 
 
+    def _latent_setup(self):
         # Layer for latent space
         
-        self.fc = Layer_fc.FC_LayerCW(self.enc_channel_list[-1]*self.latent_shape[0]* self.latent_shape[1], 1024, relu = True, dropout = False, normalize =False, batchnorm =True).to(self.opt.device)
+        self.fc = Layer_fc.FC_LayerCW(
+            self.enc_channel_list[-1]*self.latent_shape[0]* self.latent_shape[1], 1024, 
+            relu = True, dropout = False, normalize =False, batchnorm =True
+        ).to(self.opt.device)
         # self.fc_mu = nn.Linear(self.enc_channel_list[-1]*4, self.latent_dim)
-        self.fc_mu_var = Layer_fc.FC_LayerCW(1024, 2*self.latent_dim, relu = False, dropout = False, normalize =False, batchnorm =False).to(self.opt.device)
+        self.fc_mu_var = Layer_fc.FC_LayerCW(
+            1024, 2*self.latent_dim, 
+            relu = False, dropout = False, normalize =False, batchnorm =False
+        ).to(self.opt.device)
 
-        self.decoder_input_0 = Layer_fc.FC_LayerCW(self.latent_dim+self.n_classes, 1024, relu = True, dropout = False, normalize =False, batchnorm =True).to(self.opt.device)
-        self.decoder_input_1 = Layer_fc.FC_LayerCW(1024, self.enc_channel_list[-1]*self.latent_shape[0]* self.latent_shape[0], relu = True, dropout = False, normalize =False, batchnorm =True).to(self.opt.device)
+        self.decoder_input_0 = Layer_fc.FC_LayerCW(
+            self.latent_dim+self.n_classes, 1024, 
+            relu = True, dropout = False, normalize =False, batchnorm =True
+        ).to(self.opt.device)
+        self.decoder_input_1 = Layer_fc.FC_LayerCW(
+            1024, self.enc_channel_list[-1] * self.latent_shape[0]* self.latent_shape[0],
+            relu = True, dropout = False, normalize = False, batchnorm = True
+        ).to(self.opt.device)
         # self.up_sample = nn.UpsamplingNearest2d(scale_factor=2)
-
-
         
-        dims = [self.enc_model[-1].next_dims]
+        self.dims = [self.enc_model[-1].next_dims]
+
+    def _dec_setup(self):
+                
         
 
         for i, out_channels in enumerate(self.dec_channel_list):
@@ -205,12 +252,14 @@ class FFCCVAE(torch.nn.Module):
                 else:
                     class_groups = int(self.n_classes/self.n_groups[i])
 
-                in_channels = dims[-1][0]
-                layer = Layer_cnn.Conv_Layer_transpose(dims[-1], opt= self.opt, in_channels=in_channels, out_channels=out_channels, num_classes=self.n_groups[i], act_fn=self.relu_dec[i],
-                                kernel_size=self.kernel["kernel_size"], stride = self.kernel["stride"], padding=self.kernel["padding"], output_padding=self.kernel["output_padding"] , maxpool=self.maxpool,
-                                batchnorm=self.batchnorm_dec[i],  groups=group, droprate=0, loss_criterion=self.loss, ClassGroups=  class_groups).to(self.opt.device)
+                in_channels = self.dims[-1][0]
+                layer = Layer_cnn.Conv_Layer_transpose(
+                    self.dims[-1], opt= self.opt, in_channels=in_channels, out_channels=out_channels, num_classes=self.n_groups[i], act_fn=self.relu_dec[i],
+                    kernel_size=self.kernel["kernel_size"], stride = self.kernel["stride"], padding=self.kernel["padding"], output_padding=self.kernel["output_padding"] , maxpool=self.maxpool,
+                    batchnorm=self.batchnorm_dec[i],  groups=group, droprate=0, loss_criterion=self.loss, ClassGroups=  class_groups
+                ).to(self.opt.device)
                 self.dec_model.append(layer)
-                dims.append(layer.next_dims)
+                self.dims.append(layer.next_dims)
             else:
                 class_groups = None
                 self.kernel = self.dec_kernel[i]
@@ -222,30 +271,16 @@ class FFCCVAE(torch.nn.Module):
                 
                 
             
-                in_channels = dims[-1][0] # [[1, 28, 28]]
-                layer = Layer_cnn.Conv_Layer_transpose(dims[-1], opt= self.opt, in_channels=in_channels, out_channels=out_channels, num_classes=self.n_classes, act_fn=self.relu_dec[i],
-                                kernel_size=self.kernel["kernel_size"], stride = self.kernel["stride"], padding=self.kernel["padding"], output_padding=self.kernel["output_padding"] , maxpool=self.maxpool,
-                                batchnorm=self.batchnorm_dec[i],  groups=group, droprate=0, loss_criterion=self.loss, ClassGroups=  class_groups).to(self.opt.device)
+                in_channels = self.dims[-1][0] # [[1, 28, 28]]
+                layer = Layer_cnn.Conv_Layer_transpose(
+                    self.dims[-1], opt= self.opt, in_channels= in_channels, out_channels= out_channels, num_classes= self.n_classes, act_fn= self.relu_dec[i],
+                    kernel_size= self.kernel["kernel_size"], stride= self.kernel["stride"], padding= self.kernel["padding"], output_padding= self.kernel["output_padding"] ,
+                    maxpool= self.maxpool, batchnorm= self.batchnorm_dec[i], groups= group, droprate=0, loss_criterion= self.loss, ClassGroups= class_groups
+                ).to(self.opt.device)
                 self.dec_model.append(layer)
-                dims.append(layer.next_dims)
+                self.dims.append(layer.next_dims)
 
         self.classification_loss = nn.CrossEntropyLoss()
-
-        self._init_weights()
-
-        
-
-    def _init_weights(self):
-        
-        for m in self.enc_model.modules():
-            if isinstance(m, nn.Conv2d):
-                torch.nn.init.kaiming_normal_(m.weight)
-                torch.nn.init.zeros_(m.bias)
-        for m in self.dec_model.modules():
-            if isinstance(m, nn.Conv2d):
-                torch.nn.init.kaiming_normal_(m.weight)
-                torch.nn.init.zeros_(m.bias)
-        
 
     def _N_classes(self):
         if self.opt.input.dataset == "cifar10" or self.opt.input.dataset == "mnist" or self.opt.input.dataset == "senti" or self.opt.input.dataset == "fmnist":

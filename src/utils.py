@@ -563,18 +563,14 @@ def generate_and_visualize(decoder, device, n_classes= 10,  num_images=100, late
 def display_image_sparse(latents_2d, images, label, title="Generated Images", save=True, display=True, threshold=0.1, color=(0.6, 0.8, 1), save_label="image_grid"):
     """
     Display generated images on a structured grid with proper transparency for black areas.
-    
-    - Fully transparent for black (or near-black) areas.
-    - Fully visible for non-black (digit) areas.
-    - Digits in a specified soft pastel color (default is pastel blue).
+    Enhanced version with proper axes and modern styling.
     
     Parameters:
     - latents_2d: 2D latent space coordinates for positioning images on the grid
     - images: Generated images (tensor or numpy array with shape [num_images, C, H, W])
-    - labels: Corresponding labels for each image
+    - label: Label for the class being visualized
     - threshold: Intensity below which the pixels are considered "black" and made transparent
     - color: RGB tuple to set the color of the digits (default is pastel blue)
-    - save_label: The label used for saving the grid image at the end
     """
     
     num_images, C, H, W = images.shape
@@ -583,68 +579,90 @@ def display_image_sparse(latents_2d, images, label, title="Generated Images", sa
     # Normalize images to [0, 1] 
     images = (images - images.min()) / (images.max() - images.min())
 
-    # Set canvas size
-    canvas_size = int(np.ceil(np.sqrt(num_images))) * (max(H, W) + 5)  # Ensure square canvas, and room between images
-    canvas = np.zeros((canvas_size, canvas_size, 4 if C==1 else 3))  # RGBA canvas
-    # Normalize latents_2d to fit in the canvas size
+    # Set canvas size with padding for axes
+    padding = 50  # Padding for axes
+    canvas_size = int(np.ceil(np.sqrt(num_images))) * (max(H, W) + 5)  # Base canvas size
+    total_size = canvas_size + 2 * padding  # Add padding on all sides
     
-
-    # Ensure proper positioning so that images don't exceed the canvas bounds
-    if C==1:
-        images_rgba = np.zeros((num_images, H, W, 4))  # Create empty RGBA array
-        images_rgba[..., :3] = images.transpose(0, 2, 3, 1)  # Copy grayscale values to RGB
-
-        # Set alpha channel: Pixel intensity below threshold becomes transparent
-        images_rgba[..., 3] = np.where(images[:, 0, :, :] < threshold, 0, 1)
-
-        # Set the digits to the specified color (soft pastel)
-        images_rgba[..., 0] = images_rgba[..., 0] * color[0]  # Red channel
-        images_rgba[..., 1] = images_rgba[..., 1] * color[1]  # Green channel
-        images_rgba[..., 2] = images_rgba[..., 2] * color[2]  # Blue channel
-
-        images = images_rgba  # Update images to RGBA format
-
-        
+    # Create canvas with white background
+    if C == 1:
+        canvas = np.ones((total_size, total_size, 4)) * [1, 1, 1, 1]  # RGBA white canvas
     else:
-        canvas = np.ones((canvas_size, canvas_size, 3))  # RGB canvas for color images
-        positions = (latents_2d * (canvas_size - H)).astype(int)  # Scale positions
-        images = np.transpose(images, (0, 2, 3, 1))  
-    
+        canvas = np.ones((total_size, total_size, 3))  # RGB white canvas
+
+    # Process images based on channels
+    if C == 1:
+        images_rgba = np.zeros((num_images, H, W, 4))
+        images_rgba[..., :3] = np.repeat(images.transpose(0, 2, 3, 1), 3, axis=-1)
+        images_rgba[..., 3] = np.where(images[:, 0, :, :] < threshold, 0, 1)
+        images_rgba[..., 0] = images_rgba[..., 0] * color[0]
+        images_rgba[..., 1] = images_rgba[..., 1] * color[1]
+        images_rgba[..., 2] = images_rgba[..., 2] * color[2]
+        images = images_rgba
+    else:
+        images = np.transpose(images, (0, 2, 3, 1))
+
+    # Scale latent coordinates to canvas size (accounting for padding)
     latents_2d = (latents_2d - latents_2d.min(axis=0)) / (latents_2d.max(axis=0) - latents_2d.min(axis=0))
-    positions = (latents_2d * (canvas_size - H - 5)).astype(int)  # Proper scaling to fit the canvas
+    positions = (latents_2d * (canvas_size - H - 5)).astype(int) + padding
 
-    if C==1:
-        positions[:, 0] = np.clip(positions[:, 0], 0, canvas_size - W - 5)
-        positions[:, 1] = np.clip(positions[:, 1], 0, canvas_size - H - 5)
-
-    # Process each image and place it on the canvas
+    # Create figure with specific style
+    plt.style.use('seaborn-whitegrid')
+    fig, ax = plt.subplots(figsize=(12, 12), facecolor='white')
+    
+    # Plot images on canvas
     for i, (x, y) in enumerate(positions):
         x, y = int(x), int(y)
-        
-        if C == 1:  # Grayscale images
+        if C == 1:
             canvas[y:y+H, x:x+W, :] = np.maximum(canvas[y:y+H, x:x+W, :], images[i])
-        else:  # RGB images
-            canvas[y:y+H, x:x+W, :] = images[i, :, :, :]  # Place RGB image (3 channels)
+        else:
+            canvas[y:y+H, x:x+W, :] = images[i]
 
-    # Plot the final image
-    plt.figure(figsize=(8, 8))
-    plt.imshow(canvas)
-    plt.axis("off")
-    plt.xlabel("Latent X")
-    plt.ylabel("Latent Y")
+    # Display the canvas
+    ax.imshow(canvas)
+    
+    # Calculate actual latent space ranges
+    original_x = latents_2d[:, 0] * (latents_2d.max(axis=0)[0] - latents_2d.min(axis=0)[0]) + latents_2d.min(axis=0)[0]
+    original_y = latents_2d[:, 1] * (latents_2d.max(axis=0)[1] - latents_2d.min(axis=0)[1]) + latents_2d.min(axis=0)[1]
+    
+    # Set proper ticks for latent space values
+    x_ticks = np.linspace(padding, canvas_size + padding, 5)
+    y_ticks = np.linspace(padding, canvas_size + padding, 5)
+    x_labels = np.round(np.linspace(original_x.min(), original_x.max(), 5), 2)
+    y_labels = np.round(np.linspace(original_y.min(), original_y.max(), 5), 2)
+    
+    ax.set_xticks(x_ticks)
+    ax.set_yticks(y_ticks)
+    ax.set_xticklabels(x_labels)
+    ax.set_yticklabels(y_labels)
 
-    plt.title(title)
+    # Style improvements
+    ax.set_xlabel('Latent Dimension 1', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Latent Dimension 2', fontsize=12, fontweight='bold')
+    ax.set_title(f'{title} - Class {label}', fontsize=14, fontweight='bold', pad=20)
+    
+    # Add grid with light color
+    ax.grid(True, linestyle='--', alpha=0.3, color='gray')
+    
+    # Remove spines
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    
+    # Adjust layout
+    plt.tight_layout()
 
-    # Save the full grid image with the provided label
+    # Save if requested
     if save:
         os.makedirs("results", exist_ok=True)
-        plt.savefig(f"results/conditioned_{label}.png", transparent=True, bbox_inches="tight")
-        
+        plt.savefig(f"results/conditioned_{label}.png", 
+                    dpi=300, 
+                    bbox_inches="tight",
+                    facecolor='white',
+                    edgecolor='none')
+    
     if display:
         plt.show()
     plt.close()
-# # END 4)
-
 
 # 5) Visualize the latent space points
 def visualize_latent_space(z, labels, class_names, latent_dim=2, device='cpu', title="Latent Space Visualization", save=True):
