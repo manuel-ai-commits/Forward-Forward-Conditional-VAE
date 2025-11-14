@@ -3,27 +3,29 @@ device: "mps"  # cpu or cuda
 overwrite: False
 save: False
 
-
-
 input:
   path: datasets
   batch_size: 50
+  ### REMEMBER TO CHANGE BOTH THIS AND THE DATASET NAME IN DEFAULT ###
   dataset: "GTSRB" # "mnist" or "fmnist" or "cifar10" or "cifar100" or GTSRB or flowers or stl or oxfordpets
   classes_allowed: [0,1,2,3,4,5,6,7,8,9] # Number of classes to use from GTSRB dataset.
   number_samples: # Number of samples to use for training and testing for quicker runs.
 
+defaults:
+  - _self_
+  - FFCCVAE: GTSRB.yaml  # Default dataset config. Override via: python main.py dataset=mnist input.dataset=mnist
 
 model:
-  # Either BP with final elbo loss, or BP with loss equal to FFCCVAE loss. NOT BOTH!
-  bp: True  # Set to True to use backpropagation.
-  bp_ff: False  # Set to True to use feedforward backpropagation.
 
   peer_normalization: 0.03
   momentum: 0.9  # Momentum to use for the running mean in peer normalization loss.
   droprate: 0.1 # Dropout rate.
 
 training:
-  epochs: 50 # 12 or 40 or 50
+  training_mode: "ff" # Either ff, bp or bp_ff
+  elbo_kind: "MSE" # Either mse (mean squared error) or ce (cross entropy)
+
+  epochs: 55 # 12 or 40 or 50
 
   optimizer: "Adam"  # "Adam" or "SGD"
   learning_rate: 1e-3
@@ -42,98 +44,3 @@ hydra:
   run:
     dir: logs
 
-
-# MNIST
-# 12 epochs
-# FFCCVAE:
-#   enc_channel_list: [20, 80] 
-#   dec_channel_list: [20, 1] 
-#   latent_dim: 20 # 12 or 2
-#   ilt: None # "Acc" or "Fast"
-#   latent_shape: [7,9] 
-#   batchnorm_enc: [True, True]
-#   batchnorm_dec: [True,  False]
-#   relu_enc: ["relu", "relu"]
-#   relu_dec: ["relu", "sigmoid"]
-#   enc_kernel: [{"kernel_size": 4, "stride": 2, "padding": 1}, {"kernel_size": 4, "stride": 2, "padding": 1}]
-#   dec_kernel: [{"kernel_size": 4, "stride": 2, "padding": 1, "output_padding": 0}, {"kernel_size": 4, "stride": 2, "padding": 1, "output_padding": 0}]
-#   CFSE: True # True = CFSE or False = FFCNN
-#   classgroups: True # True = class groups split, False = no class groups split
-#   sf_pred: True # True = Avg+Sf, False = Avg
-#   loss: "CwC" # "CwC" or "CwC_CE" or "PvN" or "CWG"
-#   beta: 0.5
-#   max_capacity: 25
-#   train_dec: 2
-#   n_groups: [5,10]
-
-
-
-
-# # FMNIST
-# 12 epochs
-# FFCCVAE:
-#   enc_channel_list: [20, 80, 240] 
-#   dec_channel_list: [80, 20, 1] 
-#   latent_dim: 20 # 12 for MNIST, 2 for latent visualization
-#   ilt: None # "Acc" or "Fast"
-#   latent_shape: [3,4] 
-#   batchnorm_enc: [True, True, True]
-#   batchnorm_dec: [True, True,  False]
-#   relu_enc: ["relu","relu", "relu"]
-#   relu_dec: ["relu","relu", "sigmoid"]
-#   enc_kernel: [{"kernel_size": 4, "stride": 2, "padding":1}, {"kernel_size": 4, "stride": 2, "padding":1}, {"kernel_size": 4, "stride": 2, "padding":1}]
-#   dec_kernel: [{"kernel_size": 4, "stride": 2, "padding": 1, "output_padding": 1}, {"kernel_size": 4, "stride": 2, "padding": 1, "output_padding": 0}, {"kernel_size": 4, "stride": 2, "padding": 1, "output_padding": 0}]
-#   CFSE: True # True = CFSE or False = FFCNN
-#   classgroups: True # True = class groups split, False = no class groups split
-#   sf_pred: True # True = Avg+Sf, False = Avg
-#   loss: "CwC" # "CwC" or "CwC_CE" or "PvN" or "CWG"
-#   beta: 0.5
-#   max_capacity: 25
-#   train_dec: 2
-#   n_groups: [5,5, 10]
-
-# # CIFAR10
-# 40 epochs
-# FFCCVAE:
-#   enc_channel_list: [20, 80, 240, 480]
-#   dec_channel_list: [240, 80, 20, 3] 
-#   latent_dim: 2 # 2 or 128
-#   ilt: None # "Acc" or "Fast"
-#   latent_shape: [4,4] 
-#   batchnorm_enc: [True, True, True, True]
-#   batchnorm_dec: [True, True, True,  False]
-#   relu_enc: ["relu", "relu", "relu",  "relu"]
-#   relu_dec: ["relu", "relu", "relu", "sigmoid"]
-#   enc_kernel: [{"kernel_size": 4, "stride": 2, "padding": 1}, {"kernel_size": 4, "stride": 2, "padding": 1}, {"kernel_size": 4, "stride": 2, "padding": 1},  {"kernel_size": 4, "stride": 2, "padding": 1}]
-#   dec_kernel: [{"kernel_size": 4, "stride": 2, "padding": 1, "output_padding": 0}, {"kernel_size": 4, "stride": 2, "padding": 1, "output_padding": 0}, {"kernel_size": 4, "stride": 2, "padding": 1, "output_padding": 0}, {"kernel_size": 4, "stride": 2, "padding": 1, "output_padding": 0}]
-#   CFSE: True # True = CFSE or False = FFCNN
-#   classgroups: True # True = class groups split, False = no class groups split
-#   sf_pred: True # True = Avg+Sf, False = Avg
-#   loss: "CwC" # "CwC" or "CwC_CE" or "PvN" or "CWG"
-#   beta: 0.5
-#   max_capacity: 25
-#   train_dec: 2
-#   n_groups: [5,5,10,10]
-
-# # GTSRB
-# 50 epochs
-FFCCVAE:
-  enc_channel_list: [20, 80, 240, 480]
-  dec_channel_list: [240, 80, 20, 3] 
-  latent_dim: 2 # 2 or 128 or 40
-  ilt: None # "Acc" or "Fast"
-  latent_shape: [4,4] 
-  batchnorm_enc: [True, True, True, True]
-  batchnorm_dec: [True, True, True,  False]
-  relu_enc: ["relu", "relu", "relu",  "relu"]
-  relu_dec: ["relu", "relu", "relu", "sigmoid"]
-  enc_kernel: [{"kernel_size": 4, "stride": 2, "padding": 1}, {"kernel_size": 4, "stride": 2, "padding": 1}, {"kernel_size": 4, "stride": 2, "padding": 1},  {"kernel_size": 4, "stride": 2, "padding": 1}]
-  dec_kernel: [{"kernel_size": 4, "stride": 2, "padding": 1, "output_padding": 0}, {"kernel_size": 4, "stride": 2, "padding": 1, "output_padding": 0}, {"kernel_size": 4, "stride": 2, "padding": 1, "output_padding": 0}, {"kernel_size": 4, "stride": 2, "padding": 1, "output_padding": 0}]
-  CFSE: True # True = CFSE or False = FFCNN
-  classgroups: True # True = class groups split, False = no class groups split
-  sf_pred: True # True = Avg+Sf, False = Avg
-  loss: "CwC" # "CwC" or "CwC_CE" or "PvN" or "CWG"
-  beta: 0.5
-  max_capacity: 25
-  train_dec: 3
-  n_groups: [5,5,10,10]

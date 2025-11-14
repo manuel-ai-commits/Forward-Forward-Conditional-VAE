@@ -1,0 +1,19 @@
+enc_channel_list: [20, 80, 240, 480]
+dec_channel_list: [240, 80, 20, 3] 
+latent_dim: 2 # 2 or 128
+ilt: None # "Acc" or "Fast"
+latent_shape: [4,4] 
+batchnorm_enc: [True, True, True, True]
+batchnorm_dec: [True, True, True,  False]
+relu_enc: ["relu", "relu", "relu",  "relu"]
+relu_dec: ["relu", "relu", "relu", "sigmoid"]
+enc_kernel: [{"kernel_size": 4, "stride": 2, "padding": 1}, {"kernel_size": 4, "stride": 2, "padding": 1}, {"kernel_size": 4, "stride": 2, "padding": 1},  {"kernel_size": 4, "stride": 2, "padding": 1}]
+dec_kernel: [{"kernel_size": 4, "stride": 2, "padding": 1, "output_padding": 0}, {"kernel_size": 4, "stride": 2, "padding": 1, "output_padding": 0}, {"kernel_size": 4, "stride": 2, "padding": 1, "output_padding": 0}, {"kernel_size": 4, "stride": 2, "padding": 1, "output_padding": 0}]
+CFSE: True # True = CFSE or False = FFCNN
+classgroups: True # True = class groups split, False = no class groups split
+sf_pred: True # True = Avg+Sf, False = Avg
+loss: "CwC" # "CwC" or "CwC_CE" or "PvN" or "CWG"
+beta: 0.5
+max_capacity: 25
+train_dec: 2
+n_groups: [5,5,10,10]

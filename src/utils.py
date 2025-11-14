@@ -19,7 +19,7 @@ from torchvision.transforms import Compose, ToTensor, Normalize, Lambda
 from hydra.utils import get_original_cwd
 from omegaconf import OmegaConf
 
-from src import ff_mnist, FFCCVAE_model, FFCCVAE_model_classifiers
+from src import ff_mnist, FFCCVAE_model
 import wandb
 
 from sklearn.decomposition import PCA
@@ -57,7 +57,6 @@ def get_model_and_optimizer(opt):
     main_model_params = [
         p
         for p in model.parameters()
-        if all(p is not x for x in model.classification_loss.parameters())
     ]
 
     if opt.training.optimizer == "SGD":
@@ -69,13 +68,7 @@ def get_model_and_optimizer(opt):
                     "lr": opt.training.learning_rate,
                     "weight_decay": opt.training.weight_decay,
                     "momentum": opt.training.momentum,
-                },
-                {
-                    "params": model.classification_loss.parameters(),
-                    "lr": opt.training.downstream_learning_rate,
-                    "weight_decay": opt.training.downstream_weight_decay,
-                    "momentum": opt.training.momentum,
-                },
+                }
             ]
         )
     elif opt.training.optimizer == "Adam":
@@ -86,18 +79,10 @@ def get_model_and_optimizer(opt):
                     "lr": opt.training.learning_rate,
                     "weight_decay": opt.training.weight_decay,
                     "betas": (opt.training.betas[0] , opt.training.betas[1]), 
-                },
-                {
-                    "params": model.classification_loss.parameters(),
-                    "lr": opt.training.downstream_learning_rate,
-                    "weight_decay": opt.training.downstream_weight_decay,
-                    "betas": (opt.training.betas[0] , opt.training.betas[1]), 
-                },
+                }
             ]
         )
     return model, optimizer
-# 784, 2000, 2000, 2000 # main params
-# 6000, 10 # classification_loss params
 
 def get_data(opt, partition):
     if opt.input.dataset == "mnist":
@@ -166,9 +151,6 @@ def get_linear_cooldown_lr(opt, epoch, lr):
 def update_learning_rate(optimizer, opt, epoch):
     optimizer.param_groups[0]["lr"] = get_linear_cooldown_lr(
         opt, epoch, opt.training.learning_rate
-    )
-    optimizer.param_groups[1]["lr"] = get_linear_cooldown_lr(
-        opt, epoch, opt.training.downstream_learning_rate
     )
     return optimizer
 
@@ -249,14 +231,18 @@ def overlay_y_on_x3d(x, y):
         unflatten = nn.Unflatten(1, torch.Size([C, H, W]))
 
         x_ = x.clone()
+        # x_ -> [batch_size, channels * height * width]
         x_ = x_.reshape(x_.size(0), -1)
 
         x_[:, :10] *= 0.0
+        # This line sets the value at the index specified by the label [y] for each sample in the batch
+        # to the maximum value in the entire input tensor x_. This is a quick and cheap way to
+        # inject a one-hot-like label encoding into the data by setting the position y to a distinct value.
+        # x_ -> [batch_size, channels * height * width]
         x_[range(x_.shape[0]), y] = x_.max()
 
+        # x_ -> [batch_size, channels, height, width]
         x_ = unflatten(x_)
-
-
         return x_
 
 
@@ -294,7 +280,7 @@ def overlay_y_on_x4d(x, y):
         return x_
 
 
-# 1) Used for visualization of the input and reconstructed images
+#region: 1) Used for visualization of the input and reconstructed images
 def visualize_autoencoder_results(inputs, outputs=None, num_images=5, figsize=(15, 15), title="Generated Images", save=True):
     """
     Visualizes input and output images from an autoencoder side-by-side or generated images.
@@ -362,10 +348,10 @@ def visualize_autoencoder_results(inputs, outputs=None, num_images=5, figsize=(1
     
     # Show the plot
     plt.show()
-# END 1)
+#endregion
 
 
-# 2) Display some images
+#region: 2) Display some images
 def display_and_save_batch(title, batch, save=True, display=True):
     """
     Display and save a batch of images using matplotlib.
@@ -390,9 +376,148 @@ def display_and_save_batch(title, batch, save=True, display=True):
     if display:
         plt.show()
     plt.close()
-# END 2)
+#endregion
 
-# 3) Display the latent space conditioning images with 1D PCA in rows
+
+#region: 3) Display the latent space conditioning images with 2D PCA
+def generate_and_visualize(decoder, device, n_classes=10, num_images=100, latent_dim=100, grid_size=10):
+    """
+    Generate images conditioned on class labels and visualize them on a 2D latent space grid.
+    
+    Parameters:
+        decoder: The decoder model function
+        device: The device (CPU or GPU)
+        n_classes: Number of classes
+        num_images: Number of images to generate per class
+        latent_dim: Dimensionality of the latent space
+        grid_size: Unused parameter (kept for compatibility)
+    """
+    for i in range(n_classes):
+        latents = torch.randn(num_images, latent_dim, device=device)
+        labels = torch.zeros(num_images, n_classes, device=device)
+        labels[:, i] = 1
+        
+        with torch.no_grad():
+            images = decoder(torch.cat((latents, labels), dim=1))
+        
+        # Reduce latent space to 2D using PCA
+        if latent_dim > 2:
+            latents_2d = PCA(n_components=2).fit_transform(latents.cpu().numpy())
+        else:
+            latents_2d = latents.cpu().numpy()
+        
+        display_image_sparse(latents_2d, images, i)
+
+def display_image_sparse(latents_2d, images, label, title="Generated Images", save=True, display=True, threshold=0.1, color=(0.6, 0.8, 1)):
+    """
+    Display generated images positioned according to their 2D latent space coordinates.
+    
+    Parameters:
+        latents_2d: 2D coordinates [num_images, 2] for positioning images
+        images: Generated images [num_images, C, H, W] (tensor or numpy array)
+        label: Class label for the title
+        title: Plot title prefix
+        save: Whether to save the figure
+        display: Whether to display the figure
+        threshold: Pixel intensity threshold for transparency (grayscale only)
+        color: RGB color tuple for grayscale images
+    """
+    # Convert to numpy and ensure correct shape
+    if isinstance(images, torch.Tensor):
+        images = images.detach().cpu().numpy()
+    if images.ndim == 3:
+        images = images[np.newaxis, ...]
+    
+    num_images, C, H, W = images.shape
+    
+    # Normalize images to [0, 1]
+    img_min, img_max = images.min(), images.max()
+    if img_max > img_min:
+        images = (images - img_min) / (img_max - img_min)
+    else:
+        images = np.full_like(images, 0.5)
+    images = np.clip(images, 0, 1)
+    
+    # Setup canvas
+    padding = 50
+    canvas_size = int(np.ceil(np.sqrt(num_images))) * (max(H, W) + 5)
+    total_size = canvas_size + 2 * padding
+    canvas = np.ones((total_size, total_size, 4 if C == 1 else 3))
+    
+    # Process images: convert to RGBA for grayscale, transpose for RGB
+    if C == 1:
+        images_2d = images[:, 0, :, :]
+        images_rgba = np.zeros((num_images, H, W, 4))
+        for c in range(3):
+            images_rgba[..., c] = images_2d * color[c]
+        images_rgba[..., 3] = np.where(images_2d < threshold, 0, 1)
+        images = images_rgba
+    else:
+        images = np.transpose(images, (0, 2, 3, 1))
+    
+    # Normalize latent coordinates and compute positions
+    if isinstance(latents_2d, torch.Tensor):
+        latents_2d = latents_2d.cpu().numpy()
+    latents_2d = np.array(latents_2d)
+    
+    latents_min = latents_2d.min(axis=0)
+    latents_max = latents_2d.max(axis=0)
+    latents_range = latents_max - latents_min
+    latents_range[latents_range == 0] = 1.0
+    latents_2d = (latents_2d - latents_min) / latents_range
+    
+    positions = (latents_2d * (canvas_size - max(H, W) - 5)).astype(int) + padding
+    positions[:, 0] = np.clip(positions[:, 0], padding, total_size - W - padding)
+    positions[:, 1] = np.clip(positions[:, 1], padding, total_size - H - padding)
+    
+    # Place images on canvas with alpha blending
+    for i, (x, y) in enumerate(positions):
+        x, y = int(x), int(y)
+        if x + W > total_size or y + H > total_size or x < 0 or y < 0:
+            continue
+        
+        if C == 1:
+            img = images[i]
+            canvas_slice = canvas[y:y+H, x:x+W, :].copy()
+            alpha = img[:, :, 3:4]
+            canvas[y:y+H, x:x+W, :3] = img[:, :, :3] * alpha + canvas_slice[:, :, :3] * (1 - alpha)
+            canvas[y:y+H, x:x+W, 3] = np.maximum(canvas_slice[:, :, 3], alpha[:, :, 0])
+        else:
+            canvas[y:y+H, x:x+W, :] = np.clip(images[i], 0, 1)
+    
+    # Create plot
+    sns.set_style('whitegrid')
+    fig, ax = plt.subplots(figsize=(12, 12), facecolor='white')
+    ax.imshow(np.clip(canvas, 0, 1), interpolation='nearest')
+    
+    # Set axis labels and ticks
+    original_x = latents_2d[:, 0] * (latents_max[0] - latents_min[0]) + latents_min[0]
+    original_y = latents_2d[:, 1] * (latents_max[1] - latents_min[1]) + latents_min[1]
+    
+    ax.set_xticks(np.linspace(padding, canvas_size + padding, 5))
+    ax.set_yticks(np.linspace(padding, canvas_size + padding, 5))
+    ax.set_xticklabels(np.round(np.linspace(original_x.min(), original_x.max(), 5), 2))
+    ax.set_yticklabels(np.round(np.linspace(original_y.min(), original_y.max(), 5), 2))
+    
+    ax.set_xlabel('Latent Dimension 1', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Latent Dimension 2', fontsize=12, fontweight='bold')
+    ax.set_title(f'{title} - Class {label}', fontsize=14, fontweight='bold', pad=20)
+    ax.grid(True, linestyle='--', alpha=0.3, color='gray')
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    
+    plt.tight_layout()
+    
+    if save:
+        os.makedirs("results", exist_ok=True)
+        plt.savefig(f"results/conditioned_{label}.png", dpi=300, bbox_inches="tight", facecolor='white', edgecolor='none')
+    
+    if display:
+        plt.show()
+    plt.close()
+#endregion
+
+#region: 4) Display the latent space conditioning images with 1D PCA in rows
 def generate_and_visualize_1D(decoder, device, class_names=None, n_classes=10, num_images=100, latent_dim=100, grid_size=10):
     """
     Generate images conditioned on a fixed class label and visualize them on a 2D grid.
@@ -422,7 +547,7 @@ def generate_and_visualize_1D(decoder, device, class_names=None, n_classes=10, n
 
         # Generate images
         with torch.no_grad():
-            images = decoder(conditional_inputs, mode="test")
+            images = decoder(conditional_inputs)
 
         # Apply PCA to reduce latent space to 1D
         pca = PCA(n_components=1)
@@ -518,153 +643,10 @@ def display_image_rows(title, images, labels, all_latents, grid_size=5, class_na
 
     plt.close()
 
-# END 3)
+#endregion
 
 
-# 4) Display the latent space conditioning images with 2D PCA
-def generate_and_visualize(decoder, device, n_classes= 10,  num_images=100, latent_dim=100, grid_size=10):
-    """
-    Generate images conditioned on a fixed class label and visualize them on a 2D grid.
-
-    Parameters:
-        - decoder: The decoder model.
-        - device: The device (CPU or GPU).
-        - num_images: Number of images to generate.
-        - latent_dim: Dimensionality of the latent space.
-        - grid_size: Number of rows and columns in the grid for visualization.
-    """
-    # Generate random latent vectors
-    
-
-    # Generate images conditioned on a fixed class label
-    for i in range(n_classes):
-        latents = torch.randn(num_images, latent_dim, device=device)
-
-        labels = torch.zeros(num_images, 10, device=device)  # 10 classes
-        labels[:, i] = 1  # Fixed class conditioning (e.g., class index 3)
-
-        # Concatenate latent vectors with one-hot class labels
-        conditional_inputs = torch.cat((latents, labels), dim=1)
-
-        # Generate images from the decoder
-        with torch.no_grad():
-            images = decoder(conditional_inputs, mode="test")
-
-        # Apply PCA to reduce latent space to 2D
-        if latent_dim > 2:
-            pca = PCA(n_components=2)
-            latents = pca.fit_transform(latents.cpu().numpy())  # Fit PCA on latent vectors
-        else:
-            latents = latents.cpu().numpy()
-
-        # Display images in a grid using latent positions
-        display_image_sparse(latents, images, i)
-
-def display_image_sparse(latents_2d, images, label, title="Generated Images", save=True, display=True, threshold=0.1, color=(0.6, 0.8, 1), save_label="image_grid"):
-    """
-    Display generated images on a structured grid with proper transparency for black areas.
-    Enhanced version with proper axes and modern styling.
-    
-    Parameters:
-    - latents_2d: 2D latent space coordinates for positioning images on the grid
-    - images: Generated images (tensor or numpy array with shape [num_images, C, H, W])
-    - label: Label for the class being visualized
-    - threshold: Intensity below which the pixels are considered "black" and made transparent
-    - color: RGB tuple to set the color of the digits (default is pastel blue)
-    """
-    
-    num_images, C, H, W = images.shape
-    images = images.cpu().numpy()  # Convert to NumPy
-
-    # Normalize images to [0, 1] 
-    images = (images - images.min()) / (images.max() - images.min())
-
-    # Set canvas size with padding for axes
-    padding = 50  # Padding for axes
-    canvas_size = int(np.ceil(np.sqrt(num_images))) * (max(H, W) + 5)  # Base canvas size
-    total_size = canvas_size + 2 * padding  # Add padding on all sides
-    
-    # Create canvas with white background
-    if C == 1:
-        canvas = np.ones((total_size, total_size, 4)) * [1, 1, 1, 1]  # RGBA white canvas
-    else:
-        canvas = np.ones((total_size, total_size, 3))  # RGB white canvas
-
-    # Process images based on channels
-    if C == 1:
-        images_rgba = np.zeros((num_images, H, W, 4))
-        images_rgba[..., :3] = np.repeat(images.transpose(0, 2, 3, 1), 3, axis=-1)
-        images_rgba[..., 3] = np.where(images[:, 0, :, :] < threshold, 0, 1)
-        images_rgba[..., 0] = images_rgba[..., 0] * color[0]
-        images_rgba[..., 1] = images_rgba[..., 1] * color[1]
-        images_rgba[..., 2] = images_rgba[..., 2] * color[2]
-        images = images_rgba
-    else:
-        images = np.transpose(images, (0, 2, 3, 1))
-
-    # Scale latent coordinates to canvas size (accounting for padding)
-    latents_2d = (latents_2d - latents_2d.min(axis=0)) / (latents_2d.max(axis=0) - latents_2d.min(axis=0))
-    positions = (latents_2d * (canvas_size - H - 5)).astype(int) + padding
-
-    # Create figure with specific style
-    plt.style.use('seaborn-whitegrid')
-    fig, ax = plt.subplots(figsize=(12, 12), facecolor='white')
-    
-    # Plot images on canvas
-    for i, (x, y) in enumerate(positions):
-        x, y = int(x), int(y)
-        if C == 1:
-            canvas[y:y+H, x:x+W, :] = np.maximum(canvas[y:y+H, x:x+W, :], images[i])
-        else:
-            canvas[y:y+H, x:x+W, :] = images[i]
-
-    # Display the canvas
-    ax.imshow(canvas)
-    
-    # Calculate actual latent space ranges
-    original_x = latents_2d[:, 0] * (latents_2d.max(axis=0)[0] - latents_2d.min(axis=0)[0]) + latents_2d.min(axis=0)[0]
-    original_y = latents_2d[:, 1] * (latents_2d.max(axis=0)[1] - latents_2d.min(axis=0)[1]) + latents_2d.min(axis=0)[1]
-    
-    # Set proper ticks for latent space values
-    x_ticks = np.linspace(padding, canvas_size + padding, 5)
-    y_ticks = np.linspace(padding, canvas_size + padding, 5)
-    x_labels = np.round(np.linspace(original_x.min(), original_x.max(), 5), 2)
-    y_labels = np.round(np.linspace(original_y.min(), original_y.max(), 5), 2)
-    
-    ax.set_xticks(x_ticks)
-    ax.set_yticks(y_ticks)
-    ax.set_xticklabels(x_labels)
-    ax.set_yticklabels(y_labels)
-
-    # Style improvements
-    ax.set_xlabel('Latent Dimension 1', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Latent Dimension 2', fontsize=12, fontweight='bold')
-    ax.set_title(f'{title} - Class {label}', fontsize=14, fontweight='bold', pad=20)
-    
-    # Add grid with light color
-    ax.grid(True, linestyle='--', alpha=0.3, color='gray')
-    
-    # Remove spines
-    for spine in ax.spines.values():
-        spine.set_visible(False)
-    
-    # Adjust layout
-    plt.tight_layout()
-
-    # Save if requested
-    if save:
-        os.makedirs("results", exist_ok=True)
-        plt.savefig(f"results/conditioned_{label}.png", 
-                    dpi=300, 
-                    bbox_inches="tight",
-                    facecolor='white',
-                    edgecolor='none')
-    
-    if display:
-        plt.show()
-    plt.close()
-
-# 5) Visualize the latent space points
+#region: 5) Visualize the latent space points
 def visualize_latent_space(z, labels, class_names, latent_dim=2, device='cpu', title="Latent Space Visualization", save=True):
     """
     Visualizes the latent space of a trained encoder using PCA if latent_dim > 2.
@@ -717,66 +699,4 @@ def visualize_latent_space(z, labels, class_names, latent_dim=2, device='cpu', t
 
     # Show the plot
     plt.show()
-# END 5)
-
-
-
-
-
-
-
-
-
-# BOH
-def _plot_latent_space_(decoder, device, scale=1.0, n=10, image_size=32, channels=3, figsize=15):
-    """
-    Visualize the 2D latent space of a decoder model by generating images over a grid.
-    
-    Parameters:
-        model: The trained model with a `decode` method.
-        scale (float): The range of the latent space to sample.
-        n (int): Number of grid points along each axis.
-        image_size (int): The size of the output images (e.g., 32 for CIFAR-10).
-        channels (int): Number of channels in the output images (3 for RGB).
-        figsize (float): Size of the matplotlib figure.
-    """
-    # Create a blank canvas to store the grid of generated images
-    figure = np.zeros((image_size * n, image_size * n, channels))
-    
-    # Define the grid of latent space points
-    grid_x = np.linspace(-scale, scale, n)
-    grid_y = np.linspace(-scale, scale, n)[::-1]  # Reverse for correct orientation
-    
-    # Loop over each grid point and generate an image
-    for i, yi in enumerate(grid_y):
-        for j, xi in enumerate(grid_x):
-            # Create a latent space sample
-            z_sample = torch.tensor([[xi, yi]], dtype=torch.float).to(device)
-            
-            # Decode the sample into an image
-            # Pass the latent vectors through the decoder
-            h_pos = decoder(z_sample)
-            image = h_pos[0].detach().cpu().numpy().transpose(1, 2, 0)  # (C, H, W) -> (H, W, C)
-            image = np.clip(image, 0, 1)  # Ensure valid pixel values
-            
-            # Place the image in the canvas
-            figure[
-                i * image_size : (i + 1) * image_size,
-                j * image_size : (j + 1) * image_size,
-            ] = image
-    
-    # Plot the figure
-    plt.figure(figsize=(figsize, figsize))
-    plt.title("VAE Latent Space Visualization")
-    plt.xticks(
-        np.arange(image_size // 2, image_size * n, image_size),
-        labels=np.round(grid_x, 1),
-    )
-    plt.yticks(
-        np.arange(image_size // 2, image_size * n, image_size),
-        labels=np.round(grid_y, 1),
-    )
-    plt.imshow(figure, extent=(0, n, 0, n), origin="upper")
-    plt.axis("off")
-    plt.show()
-
+#endregion

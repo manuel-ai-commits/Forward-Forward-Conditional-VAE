@@ -1,6 +1,6 @@
 import hydra
 from omegaconf import DictConfig
-from src import utils, ff_mnist  # Assuming this is where 'parse_args' is defined
+from src import ff_mnist  # Assuming this is where 'parse_args' is defined
 
 import os
 import matplotlib.pyplot as plt

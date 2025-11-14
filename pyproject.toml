@@ -1,0 +1,24 @@
+[project]
+name = "ffccvae-main"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "gensim>=4.0.0",
+    "hydra-core>=1.3.2",
+    "kaggle>=1.5.0",
+    "matplotlib>=3.4.0",
+    "nltk>=3.6.0",
+    "numpy>=1.21.0",
+    "omegaconf>=2.3.0",
+    "opencv-python>=4.11.0.86",
+    "pandas>=1.3.0",
+    "pytest>=6.2.5",
+    "pytorch-image-generation-metrics>=0.1.0",
+    "scikit-learn>=1.0.0",
+    "seaborn>=0.11.0",
+    "torch>=2.9.1",
+    "torchvision>=0.24.1",
+    "wandb>=0.15.0",
+]

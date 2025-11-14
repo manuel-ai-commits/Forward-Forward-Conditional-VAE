@@ -15,7 +15,9 @@ import torch
 import numpy as np
 import cv2
 
-
+"""
+    MNIST dataset class
+"""
 class MNIST_(Dataset):
     def __init__(self, opt, partition, number_samples=None, FF_rep=False, preload=False):
         # Define transformations
@@ -78,6 +80,9 @@ class MNIST_(Dataset):
         return len(self.dataset)
     
 
+"""
+    FashionMNIST dataset class
+"""
 class FashionMNIST_(Dataset):
     def __init__(self, opt, partition, number_samples=None, FF_rep=False, preload=False):
         # Define transformations
@@ -140,6 +145,9 @@ class FashionMNIST_(Dataset):
         return len(self.dataset)
 
 
+"""
+    SVHN dataset class
+"""
 class SVHN_(Dataset):
     def __init__(self, opt, partition, number_samples=None, FF_rep=False, preload=False):
         # Define transformations
@@ -208,6 +216,9 @@ class SVHN_(Dataset):
             return len(self.data)
         return len(self.dataset)
 
+"""
+    CIFAR dataset class
+"""
 class CIFAR_(Dataset):
     def __init__(self, opt, partition, dataset_name= "cifar10", number_samples=None, FF_rep=False, preload=False):
         # Define the transformations
@@ -284,6 +295,9 @@ class CIFAR_(Dataset):
         return len(self.dataset)
 
 
+"""
+    GTSRB dataset class
+"""
 class GTSRB_(Dataset):
     def __init__(self, opt, partition, size=(64, 64), number_samples=None, FF_rep=False, allowed_categories=None, preload=False):
         transform = Compose([

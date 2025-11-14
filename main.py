@@ -64,12 +64,15 @@ def validate_or_test(opt, model, partition, epoch=None, best_val_acc=1.0, max_vi
 
     with torch.no_grad():
         for inputs, labels in data_loader:
+            # see the renage of the inputs
             inputs, labels = utils.preprocess_inputs(opt, inputs, labels)
-
             # Enable visualization only if the count is below the threshold
             visualize = visualization_count < max_visualizations
-            scalar_outputs = model.predict(
+            model.generation_reconstruction(
                 inputs, labels, visualize=visualize
+            )
+            scalar_outputs = model.predict(
+                inputs, labels
             )
             if visualize:
                 visualization_count += 1
@@ -88,11 +91,7 @@ def validate_or_test(opt, model, partition, epoch=None, best_val_acc=1.0, max_vi
         #     best_val_acc = test_results["classification_accuracy"]
 
 def set_run_name(opt):
-    if opt.model.bp or opt.model.bp_ff:
-        mode ="BP" if opt.model.bp  else "BP_FF"
-    else:
-        mode="FF"
-    run_name = f"FFCCVAE_{opt.input.dataset}_{opt.training.optimizer}_{opt.device}_Epochs:{opt.training.epochs}_BatchSize:{opt.input.batch_size}_latent_dim:{opt.FFCCVAE.latent_dim}_Mode:{mode}"
+    run_name = f"FFCCVAE_{opt.input.dataset}_{opt.training.optimizer}_{opt.device}_Epochs:{opt.training.epochs}_BatchSize:{opt.input.batch_size}_latent_dim:{opt.FFCCVAE.latent_dim}_Mode:{opt.training.training_mode}"
     return run_name
 
 @hydra.main(config_path=".", config_name="config", version_base=None)
@@ -129,14 +128,16 @@ def my_main(opt: DictConfig) -> None:
         print(f"Training the model, as no pre-existing model was found.")
         model, optimizer = utils.get_model_and_optimizer(opt)
         model = train(opt, model, optimizer)
-
+    
+    # Save the model after training (or after loading if you run testing)
+    if (not os.path.exists(model_path) or opt.overwrite) and opt.save:  # Save only if the model was newly trained or overwritten
+        torch.save(model.state_dict(), model_path)
+    
     # Run the test if required
     if opt.training.final_test:
         validate_or_test(opt, model, "test")
 
-    # Save the model after training (or after loading if you run testing)
-    if (not os.path.exists(model_path) or opt.overwrite) and opt.save:  # Save only if the model was newly trained or overwritten
-        torch.save(model.state_dict(), model_path)
+    
 
     run.finish()
 

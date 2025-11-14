@@ -13,8 +13,8 @@ datasets/**/*.gz
 
 # === MODELS ===
 # Ignore all PyTorch model checkpoint files
-models/**/*.pt
-*.pt  # also in root
+# models/**/*.pt
+# *.pt  # also in root
 
 # === WANDB ===
 # Ignore all Weights & Biases run logs
@@ -38,5 +38,15 @@ logs/
 # === Openssl 1.1.1 ===
 openssl-1.1.1w/
 
+# === old useless scripts ===
+old/
 
+# === My own results ===
+results/
+
+# === My trained models ===
+models/
+
+# === Py distribution classes ===
+distribution_classes.py
 
