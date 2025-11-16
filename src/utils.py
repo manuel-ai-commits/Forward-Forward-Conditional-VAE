@@ -19,13 +19,13 @@ from torchvision.transforms import Compose, ToTensor, Normalize, Lambda
 from hydra.utils import get_original_cwd
 from omegaconf import OmegaConf
 
-from src import ff_mnist, FFCCVAE_model
+from src import ff_data, FFCCVAE_model
 import wandb
 
 from sklearn.decomposition import PCA
 
 
-
+### ================= PARSING AND MODEL DEFINITION ================= ###
 def parse_args(opt):
     np.random.seed(opt.seed)
     torch.manual_seed(opt.seed)
@@ -33,17 +33,6 @@ def parse_args(opt):
 
     print(OmegaConf.to_yaml(opt))
     return opt
-
-def get_input_layer_size(opt):
-    if opt.input.dataset == "mnist":
-        return 784  # 28x28 grayscale images
-    elif opt.input.dataset == "senti":
-        return 302  # Example feature size for a sentiment analysis dataset
-    elif opt.input.dataset == "cifar10" or opt.input.dataset == "cifar100" or opt.input.dataset == "GTSRB":
-        return 3072  # 32x32 RGB images
-    else:
-        raise ValueError("Unknown dataset.")
-
 def get_model_and_optimizer(opt):
     model = FFCCVAE_model.FFCCVAE(opt)
     # model = FFCCVAE_model_classifiers.FFCCVAE(opt)
@@ -84,21 +73,20 @@ def get_model_and_optimizer(opt):
         )
     return model, optimizer
 
+### ================= LOADING DATA ================= ###
+def seed_worker(worker_id):
+    worker_seed = torch.initial_seed() % 2 ** 32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
 def get_data(opt, partition):
     if opt.input.dataset == "mnist":
-        dataset = ff_mnist.MNIST_(opt, partition, number_samples=opt.input.number_samples, preload=False)
+        dataset = ff_data.MNIST_(opt, partition, number_samples=opt.input.number_samples, preload=False)
     elif opt.input.dataset == "cifar10":
-        dataset = ff_mnist.CIFAR_(opt, partition, number_samples=opt.input.number_samples, preload=False)
+        dataset = ff_data.CIFAR_(opt, partition, number_samples=opt.input.number_samples, preload=False)
     elif opt.input.dataset == "fmnist":
-        dataset = ff_mnist.FashionMNIST_(opt, partition, number_samples=opt.input.number_samples, preload=False)
+        dataset = ff_data.FashionMNIST_(opt, partition, number_samples=opt.input.number_samples, preload=False)
     elif opt.input.dataset == "GTSRB":
-        dataset = ff_mnist.GTSRB_(opt, partition, allowed_categories=opt.input.classes_allowed, number_samples=opt.input.number_samples, preload=False)
-    elif opt.input.dataset == "flowers":
-        dataset = ff_mnist.Flowers_(opt,  partition, allowed_categories=opt.input.classes_allowed, number_samples=opt.input.number_samples, preload=False)  
-    elif opt.input.dataset == "stl":
-        dataset = ff_mnist.STL_(opt, partition, number_samples=opt.input.number_samples, preload=False)
-    elif opt.input.dataset == "oxfordpets":
-        dataset = ff_mnist.OxfordPets_(opt, partition, allowed_categories=opt.input.classes_allowed, number_samples=opt.input.number_samples, preload=False)
+        dataset = ff_data.GTSRB_(opt, partition, allowed_categories=opt.input.classes_allowed, number_samples=opt.input.number_samples, preload=False)
     else:
         raise ValueError("Unknown dataset.")
 
@@ -117,14 +105,7 @@ def get_data(opt, partition):
         persistent_workers=True
     )
 
-
-
-def seed_worker(worker_id):
-    worker_seed = torch.initial_seed() % 2 ** 32
-    np.random.seed(worker_seed)
-    random.seed(worker_seed)
-
-
+### ================= PREPROCESS DATA ================= ###
 def dict_to_cuda(opt, obj):
     if isinstance(obj, dict):
         for key, value in obj.items():
@@ -132,62 +113,32 @@ def dict_to_cuda(opt, obj):
     else:
         obj = obj.to(opt.device, non_blocking=True)
     return obj
-
-
 def preprocess_inputs(opt, inputs, labels):
     if "cuda" in opt.device or "mps" in opt.device:
         inputs = dict_to_cuda(opt, inputs)
         labels = dict_to_cuda(opt, labels)
     return inputs, labels
  
-# cools down after the first half of the epochs
+### ================= UPDATE LEARNING RATE ================= ###
 def get_linear_cooldown_lr(opt, epoch, lr):
     if epoch > (opt.training.epochs // 2):
         return lr * 2 * (1 + opt.training.epochs - epoch) / opt.training.epochs
     else:
         return lr
-
-
 def update_learning_rate(optimizer, opt, epoch):
     optimizer.param_groups[0]["lr"] = get_linear_cooldown_lr(
         opt, epoch, opt.training.learning_rate
     )
     return optimizer
 
-
+### ================= ACCURACY COMPUTATION UTILS FUN ================= ###
 def get_accuracy(opt, output, target):
     """Computes the accuracy."""
     with torch.no_grad():
         prediction = torch.argmax(output, dim=1)
         return (prediction == target).sum() / opt.input.batch_size
 
-def get_mse_cwc(input_tensor, n_classes):
-    """
-    Computes the mean squared value for each subset of the input tensor.
-
-    Args:
-        input_tensor (torch.Tensor): Input tensor of shape (batch_size, channels, height, width).
-        n_classes (int): Number of classes (to divide the channel dimension into subsets).
-        subset_dims (list): Dimensions along which to compute the mean squared value (e.g., [2, 3, 4]).
-
-    Returns:
-        torch.Tensor: A tensor of shape (batch_size, n_classes) containing the mean squared values per subset.
-    """
-    # Step 1: Reshape the tensor to divide the channels into `n_classes` subsets
-    reshaped = input_tensor.view(
-        input_tensor.shape[0], 
-        n_classes, 
-        input_tensor.shape[1] // n_classes, 
-        input_tensor.shape[2],
-        input_tensor.shape[3]
-    )
-    
-    # Step 2: Compute the mean squared value for each subset along the specified dimensions
-    mse_per_subset = (reshaped ** 2).mean(dim=[2,3,4])
-    
-    return mse_per_subset
-
-
+### ================= SAVE, PRINT AND LOG RESULTS ================= ###
 def print_results(partition, iteration_time, scalar_outputs, epoch=None):
     if epoch is not None:
         print(f"Epoch {epoch} \t", end="")
@@ -206,14 +157,10 @@ def print_results(partition, iteration_time, scalar_outputs, epoch=None):
         for key, value in scalar_outputs.items():
             partition_scalar_outputs[f"{partition}_{key}"] = value
     wandb.log(partition_scalar_outputs, step=epoch)
-
-# create save_model function
 def save_model(model):
     torch.save(model.state_dict(), f"{wandb.run.name}-model.pt")
     # log model to wandb
     wandb.save(f"{wandb.run.name}-model.pt")
-
-
 def log_results(result_dict, scalar_outputs, num_steps):
     for key, value in scalar_outputs.items():
         if isinstance(value, float):
@@ -222,6 +169,7 @@ def log_results(result_dict, scalar_outputs, num_steps):
             result_dict[key] += value.item() / num_steps
     return result_dict
 
+### ================= OVERLAY ON Y ================= ###
 def overlay_y_on_x3d(x, y):
     """Replace the first 10 pixels of data [x] with one-hot-encoded label [y]
     """
@@ -244,8 +192,6 @@ def overlay_y_on_x3d(x, y):
         # x_ -> [batch_size, channels, height, width]
         x_ = unflatten(x_)
         return x_
-
-
 def overlay_y_on_x(x, y):
     """Replace the first 10 pixels of data [x] with one-hot-encoded label [y]
     """
@@ -256,8 +202,6 @@ def overlay_y_on_x(x, y):
         x_[batch_range, y] = x.max()
 
         return x_
-
-
 def overlay_y_on_x4d(x, y):
     """Replace the first 10 pixels of data [x] with one-hot-encoded label [y]
     """
@@ -279,7 +223,7 @@ def overlay_y_on_x4d(x, y):
 
         return x_
 
-
+### ================= VISUALIZATION ================= ###
 #region: 1) Used for visualization of the input and reconstructed images
 def visualize_autoencoder_results(inputs, outputs=None, num_images=5, figsize=(15, 15), title="Generated Images", save=True):
     """
@@ -407,7 +351,6 @@ def generate_and_visualize(decoder, device, n_classes=10, num_images=100, latent
             latents_2d = latents.cpu().numpy()
         
         display_image_sparse(latents_2d, images, i)
-
 def display_image_sparse(latents_2d, images, label, title="Generated Images", save=True, display=True, threshold=0.1, color=(0.6, 0.8, 1)):
     """
     Display generated images positioned according to their 2D latent space coordinates.
@@ -565,8 +508,6 @@ def generate_and_visualize_1D(decoder, device, class_names=None, n_classes=10, n
 
     # Visualize all images together
     display_image_rows("PLOT", all_images, all_labels, all_latents,  grid_size, class_names)
-
-
 def display_image_rows(title, images, labels, all_latents, grid_size=5, class_names=None, save=True, display=True):
     """
     Display and save images in a grid by their class names instead of raw labels, with labels centered vertically on each row.
@@ -642,7 +583,6 @@ def display_image_rows(title, images, labels, all_latents, grid_size=5, class_na
         plt.show()
 
     plt.close()
-
 #endregion
 
 

@@ -1,8 +1,8 @@
-from src.Datasets import *
 import numpy as np
 import torch.nn.functional as F
 from torch.optim import Adam, SGD
 from torch import nn
+import torch
 
 class Softmax_CF(nn.Module):
     def __init__(self, flattened_size, opt, out_classes=10,

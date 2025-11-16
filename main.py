@@ -72,7 +72,7 @@ def validate_or_test(opt, model, partition, epoch=None, best_val_acc=1.0, max_vi
                 inputs, labels, visualize=visualize
             )
             scalar_outputs = model.predict(
-                inputs, labels
+                inputs
             )
             if visualize:
                 visualization_count += 1

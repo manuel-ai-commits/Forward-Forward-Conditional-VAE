@@ -84,8 +84,6 @@ class FFCCVAE(torch.nn.Module):
         # Initialize the weights
         self._init_weights()
 
-        
-
     def _init_weights(self):
         
         for m in self.enc_model.modules():
@@ -335,9 +333,8 @@ class FFCCVAE(torch.nn.Module):
     """
         All sizes are described in the comments
     """
-
     # ============================== TRAIN ============================== #
-    def _encoder_CVAE_train(self, z, y, scalar_outputs, epoch):                
+    def _encoder_CVAE_train(self, z, y, epoch, scalar_outputs):                
         # a0 -> [batch_size, channels, height, width]
         # y -> [batch_size, 1]
         # y_l -> [batch_size, 1]
@@ -354,10 +351,20 @@ class FFCCVAE(torch.nn.Module):
         y_n= y_n.view(y_n.shape[0], 1)
         # One hot encoding for positive data
         # onehot_y -> [batch_size, num_classes]
-        onehot_y= self._one_hot(y)
+        # Use uniform distribution if y contains -1 (neutral label)
+        if (y == -1).any():
+            onehot_y = torch.full((y.shape[0], self.n_classes), 1.0 / self.n_classes, 
+                                 requires_grad=False, device=self.opt.device)
+        else:
+            onehot_y= self._one_hot(y)
         # One hot encoding for negative data
         # onehot_y_neg -> [batch_size, num_classes]
-        onehot_y_neg= self._one_hot(y_n)
+        # Use uniform distribution if y_n contains -1 (neutral label)
+        if (y_n == -1).any():
+            onehot_y_neg = torch.full((y_n.shape[0], self.n_classes), 1.0 / self.n_classes, 
+                                     requires_grad=False, device=self.opt.device)
+        else:
+            onehot_y_neg= self._one_hot(y_n)
 
         # This step broadcasts the one-hot encoded labels (of shape [batch_size, num_classes])
         # so that they can be concatenated along the channel dimension with the feature maps 'z'.
@@ -388,7 +395,7 @@ class FFCCVAE(torch.nn.Module):
         enc_out.reverse()
 
         return h_pos, y, y_n, onehot_y, onehot_y_neg, enc_out, scalar_outputs
-    def _latent_CVAE_train(self, h_pos, onehot_y, scalar_outputs, y, y_n, onehot_y_neg):
+    def _latent_CVAE_train(self, h_pos, y, y_n, onehot_y, onehot_y_neg, scalar_outputs):
         # h_pos -> [batch_size, channels_enc, height_enc, width_enc]
 
         
@@ -435,7 +442,7 @@ class FFCCVAE(torch.nn.Module):
         h_pos= torch.cat((h_pos, onehot_y), dim=1)
 
         return h_pos, h_neg, mu, log_var, scalar_outputs
-    def _decoder_CVAE_train(self, h_pos,  y, y_n, mu, log_var, enc_activations, h_neg, scalar_outputs, epoch):
+    def _decoder_CVAE_train(self, h_pos, h_neg, y, y_n, mu, log_var, enc_activations, epoch, scalar_outputs):
         # h_pos -> [batch_size, latent_dim + num_classes]
         # h_neg -> [batch_size, latent_dim + num_classes]
         # y -> [batch_size, 1]
@@ -587,7 +594,7 @@ class FFCCVAE(torch.nn.Module):
         h_pos= torch.cat((h_pos, onehot_y), dim=1)
 
         return h_pos, h_neg
-    def _decoder_CVAE_generate(self, h_pos, h_neg, y, y_n):
+    def _decoder_CVAE_generate(self, h_pos, h_neg,  y, y_n):
 
         # h_pos -> [batch_size, latent_dim + num_classes]
         # h_neg -> [batch_size, latent_dim + num_classes]
@@ -618,6 +625,7 @@ class FFCCVAE(torch.nn.Module):
             h_pos= self.decoder_input_1.forward(h_pos)
             # h_pos -> [batch_size, channels_enc, height_enc, width_enc]
             h_pos= h_pos.view(-1, self.enc_channel_list[-1], self.latent_shape[0], self.latent_shape[0])
+            
 
         # Remove the first activation from the list, because it was already used for the decoder input
 
@@ -626,65 +634,8 @@ class FFCCVAE(torch.nn.Module):
             h_pos= convlayer.forward(h_pos)
         
         return h_pos
-    
-    # ============================== TEST ============================== #
-    def _encoder_CVAE_test(self, z, label: int = None, scalar_outputs= None):                
-        activations= []
 
-        if label is not None:
-            # Ensure the label is valid
-            if not 0 <= label < self.n_classes:
-                raise ValueError(f"Invalid label: {label}. Must be between 0 and {self.n_classes - 1}.")
-            
-            label= torch.full((z.shape[0], 1), label, dtype=torch.long,requires_grad=False, device=self.opt.device)
-            label= label.long()
-            label= label.view(z.shape[0], 1)
-            
-            # Generate one-hot for the selected label
-            onehot_y= self._one_hot(label)
-        else:
-            # No label (all zeros)
-            # onehot_y= torch.zeros((z.shape[0], self.n_classes),requires_grad=False, device=self.opt.device)
-            # Neutral labels (all 0.1)
-            onehot_y= torch.full((z.shape[0], self.n_classes), 0.1, requires_grad=False, device=self.opt.device)
-
-        # Reshape one-hot encoding for concatenation
-        onehot_conv_y = onehot_y.view(z.shape[0], 1, 1, self.n_classes).expand(
-            -1, z.shape[1], z.shape[2], -1
-        )
-
-        # Concatenate one-hot encoding with latent representation
-        h_pos= torch.cat((z, onehot_conv_y), dim=3)
-        
-        for i, convlayer in enumerate(self.enc_model):
-            h_pos= convlayer.forward(h_pos)
-            activations.append(h_pos.view(h_pos.size(0), -1) )
-
-        return h_pos, onehot_y, activations, scalar_outputs
-    def _latent_CVAE_test(self, h_pos, onehot_y, scalar_outputs, label= None):
-        # h_pos -> [batch_size, channels_enc, height_enc, width_enc]
-        if label is not None:
-            y= torch.full((h_pos.size(0),), label, dtype=torch.long, device=h_pos.device)
-            h_pos= utils.overlay_y_on_x3d(h_pos, y)
-            # h_pos -> [batch_size, size_fc]
-            h_pos= self.fc.forward(h_pos)
-        
-        else:
-            h_pos= self.fc.forward(h_pos)
-            
-        # mu_var -> [batch_size, 2*latent_dim]
-        mu_var= self.fc_mu_var.forward(h_pos)
-        # mu -> [batch_size, latent_dim]
-        mu= mu_var[:, :self.latent_dim]
-        # log_var -> [batch_size, latent_dim]
-        log_var= mu_var[:, self.latent_dim:]
-        # h_pos -> [batch_size, latent_dim]
-        h_pos= self._reparameterize(mu, log_var)
-        # h_pos -> [batch_size, latent_dim + num_classes]
-        h_pos= torch.cat((h_pos, onehot_y), dim=1)
-
-        return h_pos
-    def _decoder_CVAE_test(self, h_pos):
+    def _decoder_CVAE_vis(self, h_pos):
         # h_pos -> [batch_size, latent_dim + num_classes]
         # h_pos -> [batch_size, size_fc]
         h_pos= self.decoder_input_0.forward(h_pos)
@@ -702,17 +653,17 @@ class FFCCVAE(torch.nn.Module):
         scalar_outputs= {"Loss": torch.zeros(1, device=self.opt.device)}
         # torch.autograd.set_detect_anomaly(True)
         if epoch < self.train_enc and self.training_mode in ("ff", "bp_ff"):
-            h_pos, y, y_n, onehot_y, onehot_y_neg, enc_activations, scalar_outputs= self._encoder_CVAE_train(z, labels, scalar_outputs, epoch)
+            h_pos, y, y_n, onehot_y, onehot_y_neg, enc_activations, scalar_outputs= self._encoder_CVAE_train(z, labels, epoch, scalar_outputs)
             return scalar_outputs
         else: 
             if self.training_mode in ("ff", "bp_ff"):
-                 with torch.no_grad():
-                    h_pos, y, y_n, onehot_y, onehot_y_neg, enc_activations, scalar_outputs= self._encoder_CVAE_train(z, labels, scalar_outputs, epoch)
+                with torch.no_grad():
+                    h_pos, y, y_n, onehot_y, onehot_y_neg, enc_activations, scalar_outputs= self._encoder_CVAE_train(z, labels, epoch, scalar_outputs)
             else:
-                h_pos, y, y_n, onehot_y, onehot_y_neg, enc_activations, scalar_outputs= self._encoder_CVAE_train(z, labels, scalar_outputs, epoch)
+                h_pos, y, y_n, onehot_y, onehot_y_neg, enc_activations, scalar_outputs= self._encoder_CVAE_train(z, labels, epoch, scalar_outputs)
 
-            h_pos, h_neg, mu, log_var, scalar_outputs= self._latent_CVAE_train(h_pos,onehot_y, scalar_outputs, y, y_n, onehot_y_neg)
-            h_pos, scalar_outputs= self._decoder_CVAE_train(h_pos, y, y_n, mu, log_var, enc_activations, h_neg, scalar_outputs, epoch)
+            h_pos, h_neg, mu, log_var, scalar_outputs= self._latent_CVAE_train(h_pos, y, y_n, onehot_y, onehot_y_neg, scalar_outputs)
+            h_pos, scalar_outputs= self._decoder_CVAE_train(h_pos, h_neg, y, y_n, mu, log_var, enc_activations, epoch, scalar_outputs)
             
             return scalar_outputs
 
@@ -748,7 +699,7 @@ class FFCCVAE(torch.nn.Module):
 
             # Generate conditioned images for all labels
             utils.generate_and_visualize(
-                self._decoder_CVAE_test,
+                self._decoder_CVAE_vis,
                 self.opt.device,
                 n_classes=self.n_classes,
                 num_images= 100,
@@ -757,7 +708,7 @@ class FFCCVAE(torch.nn.Module):
             
             # Generate conditioned images for all labels in each row
             utils.generate_and_visualize_1D(
-                self._decoder_CVAE_test,
+                self._decoder_CVAE_vis,
                 self.opt.device,
                 class_names= self.class_names,
                 n_classes=self.n_classes,
@@ -777,14 +728,17 @@ class FFCCVAE(torch.nn.Module):
                 device=self.opt.device
             )
 
-    def predict(self, inputs, labels):
+    def predict(self, inputs):
         scalar_outputs= {"Loss": torch.zeros(1, device=self.opt.device)}
-        epoch = 0
-        
+        epoch = min([self.start_end[i][0] for i in range(len(self.start_end))])
+
+        #Make y ('labels') full of -1 for each sample so we can test without prior knowledge
+        # -1 is a neutral value that creates a uniform distribution across all classes
+        labels = torch.full((inputs.shape[0],), -1, dtype=torch.long, device=inputs.device)
+
         with torch.no_grad():
-            # give epoch as 
-            h_pos, y, y_n, onehot_y, onehot_y_neg, enc_activations, scalar_outputs= self._encoder_CVAE_train(inputs, labels, scalar_outputs, epoch)
-            h_pos, h_neg, mu, log_var, scalar_outputs= self._latent_CVAE_train(h_pos,onehot_y, scalar_outputs, y, y_n, onehot_y_neg)
-            h_pos, scalar_outputs= self._decoder_CVAE_train(h_pos, y, y_n, mu, log_var, enc_activations, h_neg, scalar_outputs, epoch)
-            
+            h_pos, y, y_n, onehot_y, onehot_y_neg, enc_activations, scalar_outputs= self._encoder_CVAE_train(inputs, labels, epoch, scalar_outputs)
+            h_pos, h_neg, mu, log_var, scalar_outputs= self._latent_CVAE_train(h_pos, y, y_n, onehot_y, onehot_y_neg, scalar_outputs)
+            h_pos, scalar_outputs= self._decoder_CVAE_train(h_pos, h_neg, y, y_n, mu, log_var, enc_activations, epoch, scalar_outputs)
         return scalar_outputs
+            
